@@ -27,7 +27,7 @@ import com.twitter.scalding.serialization.{ OrderedSerialization, UnitOrderedSer
 import com.twitter.scalding.serialization.OrderedSerialization.Result
 import com.twitter.scalding.serialization.macros.impl.BinaryOrdering
 import com.twitter.scalding.serialization.macros.impl.BinaryOrdering._
-import com.stripe.dagon.{FunctionK, Memoize, RefPair}
+import com.stripe.dagon.{Memoize, RefPair}
 
 import scala.util.Try
 import scala.util.hashing.MurmurHash3
@@ -140,11 +140,11 @@ object TypedPipe extends Serializable {
     }
   }
 
-   final case class CoGroupedPipe[K, V](cogrouped: CoGrouped[K, V]) extends TypedPipe[(K, V)]
+   final case class CoGroupedPipe[K, V](@transient cogrouped: CoGrouped[K, V]) extends TypedPipe[(K, V)]
    final case class CounterPipe[A](pipe: TypedPipe[(A, Iterable[((String, String), Long)])]) extends TypedPipe[A]
    final case class CrossPipe[T, U](left: TypedPipe[T], right: TypedPipe[U]) extends TypedPipe[(T, U)] {
      def viaHashJoin: TypedPipe[(T, U)] =
-       left.groupAll.hashJoin(right.groupAll).values
+       left.map(((), _)).hashJoin(right.map(((), _))).values
    }
    final case class CrossValue[T, U](left: TypedPipe[T], right: ValuePipe[U]) extends TypedPipe[(T, U)] {
      def viaHashJoin: TypedPipe[(T, U)] =
@@ -158,27 +158,27 @@ object TypedPipe extends Serializable {
         }
    }
    final case class DebugPipe[T](input: TypedPipe[T]) extends TypedPipe[T]
-   final case class FilterKeys[K, V](input: TypedPipe[(K, V)], fn: K => Boolean) extends TypedPipe[(K, V)]
-   final case class Filter[T](input: TypedPipe[T], fn: T => Boolean) extends TypedPipe[T]
-   final case class FlatMapValues[K, V, U](input: TypedPipe[(K, V)], fn: V => TraversableOnce[U]) extends TypedPipe[(K, U)]
-   final case class FlatMapped[T, U](input: TypedPipe[T], fn: T => TraversableOnce[U]) extends TypedPipe[U]
+   final case class FilterKeys[K, V](input: TypedPipe[(K, V)], @transient fn: K => Boolean) extends TypedPipe[(K, V)]
+   final case class Filter[T](input: TypedPipe[T], @transient fn: T => Boolean) extends TypedPipe[T]
+   final case class FlatMapValues[K, V, U](input: TypedPipe[(K, V)], @transient fn: V => TraversableOnce[U]) extends TypedPipe[(K, U)]
+   final case class FlatMapped[T, U](input: TypedPipe[T], @transient fn: T => TraversableOnce[U]) extends TypedPipe[U]
    final case class ForceToDisk[T](input: TypedPipe[T]) extends TypedPipe[T]
    final case class Fork[T](input: TypedPipe[T]) extends TypedPipe[T]
-   final case class HashCoGroup[K, V, W, R](left: TypedPipe[(K, V)], right: HashJoinable[K, W], joiner: (K, V, Iterable[W]) => Iterator[R]) extends TypedPipe[(K, R)]
+   final case class HashCoGroup[K, V, W, R](left: TypedPipe[(K, V)], @transient right: HashJoinable[K, W], @transient joiner: (K, V, Iterable[W]) => Iterator[R]) extends TypedPipe[(K, R)]
    final case class IterablePipe[T](iterable: Iterable[T]) extends TypedPipe[T]
-   final case class MapValues[K, V, U](input: TypedPipe[(K, V)], fn: V => U) extends TypedPipe[(K, U)]
-   final case class Mapped[T, U](input: TypedPipe[T], fn: T => U) extends TypedPipe[U]
+   final case class MapValues[K, V, U](input: TypedPipe[(K, V)], @transient fn: V => U) extends TypedPipe[(K, U)]
+   final case class Mapped[T, U](input: TypedPipe[T], @transient fn: T => U) extends TypedPipe[U]
    final case class MergedTypedPipe[T](left: TypedPipe[T], right: TypedPipe[T]) extends TypedPipe[T]
-   final case class ReduceStepPipe[K, V1, V2](reduce: ReduceStep[K, V1, V2]) extends TypedPipe[(K, V2)]
-   final case class SourcePipe[T](source: TypedSource[T]) extends TypedPipe[T]
-   final case class SumByLocalKeys[K, V](input: TypedPipe[(K, V)], semigroup: Semigroup[V]) extends TypedPipe[(K, V)]
-   final case class TrappedPipe[T](input: TypedPipe[T], sink: Source with TypedSink[T], conv: TupleConverter[T]) extends TypedPipe[T]
+   final case class ReduceStepPipe[K, V1, V2](@transient reduce: ReduceStep[K, V1, V2]) extends TypedPipe[(K, V2)]
+   final case class SourcePipe[T](@transient source: TypedSource[T]) extends TypedPipe[T]
+   final case class SumByLocalKeys[K, V](input: TypedPipe[(K, V)], @transient semigroup: Semigroup[V]) extends TypedPipe[(K, V)]
+   final case class TrappedPipe[T](input: TypedPipe[T], @transient sink: Source with TypedSink[T], @transient conv: TupleConverter[T]) extends TypedPipe[T]
    /**
     * descriptions carry a boolean that is true if we should deduplicate the message.
     * This is used for line numbers which are otherwise often duplicated
     */
    final case class WithDescriptionTypedPipe[T](input: TypedPipe[T], descriptions: List[(String, Boolean)]) extends TypedPipe[T]
-   final case class WithOnComplete[T](input: TypedPipe[T], fn: () => Unit) extends TypedPipe[T]
+   final case class WithOnComplete[T](input: TypedPipe[T], @transient fn: () => Unit) extends TypedPipe[T]
 
    case object EmptyTypedPipe extends TypedPipe[Nothing] {
      // we can't let the default TypedPipe == go here, it will stack overflow on a pattern match
@@ -241,7 +241,7 @@ object TypedPipe extends Serializable {
    * This is a def because it allocates a new memo on each call. This is
    * important to avoid growing a memo indefinitely
    */
-  private def eqFn: RefPair[TypedPipe[_], TypedPipe[_]] => Boolean = {
+  private def eqFn: RefPair[TypedPipe[Any], TypedPipe[Any]] => Boolean = {
 
     def eqCoGroupable(left: CoGroupable[_, _], right: CoGroupable[_, _], rec: RefPair[TypedPipe[_], TypedPipe[_]] => Boolean): Boolean = {
       import CoGrouped._
@@ -275,7 +275,7 @@ object TypedPipe extends Serializable {
       (zeroLeft == zeroRight) && rec(RefPair(left.mapped, right.mapped))
     }
 
-    Memoize.function[RefPair[TypedPipe[_], TypedPipe[_]], Boolean] {
+    Memoize.function[RefPair[TypedPipe[Any], TypedPipe[Any]], Boolean] {
       case (pair, _) if pair.itemsEq => true
       case (RefPair(CoGroupedPipe(left), CoGroupedPipe(right)), rec) =>
         eqCoGroupable(left, right, rec)
@@ -742,7 +742,7 @@ sealed abstract class TypedPipe[+T] extends Serializable with Product {
    * be lazy, call .iterator and use the Iterator inside instead.
    */
   def toIterableExecution: Execution[Iterable[T]] =
-    Execution.toIterable(this)
+    forceToDiskExecution.flatMap(Execution.toIterable)
 
   /** use a TupleUnpacker to flatten U out into a cascading Tuple */
   def unpackToPipe[U >: T](fieldNames: Fields)(implicit fd: FlowDef, mode: Mode, up: TupleUnpacker[U]): Pipe = {
@@ -768,9 +768,7 @@ sealed abstract class TypedPipe[+T] extends Serializable with Product {
   def write(dest: TypedSink[T])(implicit flowDef: FlowDef, mode: Mode): TypedPipe[T] = {
     // We do want to record the line number that this occured at
     val next = withLine
-    FlowStateMap.mutate(flowDef) { fs =>
-      (fs.addTypedWrite(next, dest, mode), ())
-    }
+    FlowStateMap.merge(flowDef, FlowState.withTypedWrite(next, dest, mode))
     next
   }
 
